@@ -54,7 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const apiMode = apiModeSelect.value;
         const projectId = projectIdInput.value.trim();
         const location = locationSelect.value;
-        const modelId = modelIdInput.value.trim() || 'gemini-3-flash-preview';
+        const modelId = modelIdInput.value.trim() || 'gemini-1.5-flash';
 
         const targetLang = targetLangSelect.value;
         const density = densityInput.value;

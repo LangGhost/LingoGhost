@@ -15,38 +15,80 @@ chrome.storage.local.get(['geminiApiKey', 'apiMode', 'projectId', 'location', 'm
     const hasAuth = (mode === 'aistudio' && result.geminiApiKey) || (mode === 'vertex' && result.projectId);
 
     if (hasAuth && !isProcessing) {
-        startTranslation({
+        initLiveTeacher({
             apiKey: result.geminiApiKey,
             apiMode: mode,
             projectId: result.projectId,
             location: result.location,
-            // Default to Gemini 3 Flash
-            modelId: result.modelId || 'gemini-3-flash-preview',
+            // Default to Gemini 1.5 Flash (Stable & Fast)
+            modelId: result.modelId || 'gemini-1.5-flash',
             targetLang: result.targetLang || 'Spanish',
             density: result.density || 20
         });
     }
 });
 
-function startTranslation(config) {
-    isProcessing = true;
-    console.log("LingoGhost: Starting translation with config:", config);
+// Live Teacher State
+let lastScrollY = 0;
+let isRequestPending = false;
+let processedNodes = new Set(); // Keep track of nodes we've already seemingly processed
 
-    // 1. Collect Text Nodes
+function initLiveTeacher(config) {
+    console.log("LingoGhost: Live Teacher is awake 👨‍🏫");
+
+    // Initial lesson (scan top of page)
+    processViewport(config);
+
+    // Watch for movement
+    setInterval(() => {
+        checkScroll(config);
+    }, 3000); // Check every 3s
+}
+
+function checkScroll(config) {
+    if (isRequestPending) return;
+
+    const currentScrollY = window.scrollY;
+    // If moved more than 300px (approx 1 screen scroll)
+    if (Math.abs(currentScrollY - lastScrollY) > 300) {
+        console.log("LingoGhost: User moved significantly, checking for new lesson...");
+        lastScrollY = currentScrollY;
+        processViewport(config);
+    }
+}
+
+function processViewport(config) {
+    if (isRequestPending) return;
+    isRequestPending = true;
+
+    // Collect Visible Text
     const walker = document.createTreeWalker(
         document.body,
         NodeFilter.SHOW_TEXT,
         {
             acceptNode: (node) => {
-                const parent = node.parentElement;
-                if (!parent) return NodeFilter.FILTER_REJECT;
+                // Must have parent
+                if (!node.parentElement) return NodeFilter.FILTER_REJECT;
+                // Skip tags
+                const tag = node.parentElement.tagName.toLowerCase();
+                if (['script', 'style', 'noscript', 'textarea', 'input', 'code', 'pre'].includes(tag)) return NodeFilter.FILTER_REJECT;
+                // Skip already processed? (Hard to track exact nodes after replacement, but try parent)
+                if (node.parentElement.classList.contains('langswitch-text')) return NodeFilter.FILTER_REJECT;
 
-                const tag = parent.tagName.toLowerCase();
-                if (['script', 'style', 'noscript', 'textarea', 'input', 'code', 'pre'].includes(tag)) {
-                    return NodeFilter.FILTER_REJECT;
-                }
+                // Check Visibility
+                const rect = node.parentElement.getBoundingClientRect();
+                const inViewport = (
+                    rect.top >= -100 &&
+                    rect.left >= 0 &&
+                    rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) + 100 &&
+                    rect.right <= (window.innerWidth || document.documentElement.clientWidth)
+                );
 
-                if (node.textContent.trim().length < 4) return NodeFilter.FILTER_REJECT; // Skip short noise
+                if (!inViewport) return NodeFilter.FILTER_REJECT;
+
+                // Length check
+                if (node.textContent.trim().length < 20) return NodeFilter.FILTER_REJECT;
+
                 return NodeFilter.FILTER_ACCEPT;
             }
         }
@@ -56,24 +98,31 @@ function startTranslation(config) {
     let combinedText = "";
 
     while (walker.nextNode()) {
-        // Grab a chunk of notes (simple logic: first 20 nodes or ~2000 chars)
-        // For MVP, limit to avoid token limits.
-        textNodes.push(walker.currentNode);
-        combinedText += walker.currentNode.textContent + " ";
-        if (combinedText.length > 4000) break; // Limit for MVP
+        const node = walker.currentNode;
+        // Double check not in set
+        if (processedNodes.has(node)) continue;
+
+        textNodes.push(node);
+        combinedText += node.textContent + " ";
+        processedNodes.add(node); // Mark as pending
+
+        if (combinedText.length > 1500) break; // Small batch for "Lesson"
     }
 
-    if (combinedText.length === 0) {
-        console.log("LingoGhost: No suitable text found.");
-        return;
+    if (combinedText.length < 50) {
+        isRequestPending = false;
+        return; // Nothing new to teach here
     }
 
-    // 2. Request Translation
+    // 2. Request Translation (Lesson)
+    console.log("LingoGhost: Preparing lesson for this section...");
     chrome.runtime.sendMessage({
         action: "translate",
         text: combinedText,
         ...config
     }, (response) => {
+        isRequestPending = false;
+
         if (chrome.runtime.lastError) {
             console.error("LingoGhost runtime error:", chrome.runtime.lastError);
             return;
@@ -157,5 +206,161 @@ function applyReplacements(nodes, replacements) {
         }
     });
 
-    console.log(`LingoGhost: Replaced ${count} words.`);
+    console.log(`LingoGhost: Created ${count} quiz words.`);
+}
+
+// Global state for quiz
+let currentPopup = null;
+let userScore = 0;
+
+// Load score on startup
+chrome.storage.local.get(['lingoGhostScore'], (result) => {
+    userScore = result.lingoGhostScore || 0;
+});
+
+function updateScore(points) {
+    userScore += points;
+    chrome.storage.local.set({ lingoGhostScore: userScore });
+}
+
+// Handle clicks on words to show quiz
+document.addEventListener('click', (e) => {
+    // 1. Close existing popup if clicking outside
+    if (currentPopup && !currentPopup.contains(e.target) && !e.target.classList.contains('langswitch-word')) {
+        currentPopup.remove();
+        currentPopup = null;
+    }
+
+    // 2. Open quiz if clicking a word
+    if (e.target.classList.contains('langswitch-word')) {
+        // Prevent default double-click selection etc
+        e.preventDefault();
+        e.stopPropagation();
+
+        const wordSpan = e.target;
+
+        // If already solved, ignore or show different msg
+        if (wordSpan.classList.contains('solved-correct')) return;
+
+        showQuizPopup(wordSpan);
+    }
+});
+
+function showQuizPopup(targetElement) {
+    if (currentPopup) currentPopup.remove();
+
+    const contextWord = targetElement.textContent;
+    const correctAnswer = targetElement.dataset.original;
+
+    // Clean up correct answer for comparison
+    const cleanCorrect = correctAnswer.replace(/^[^\w]+|[^\w]+$/g, '');
+
+    const alternatives = JSON.parse(targetElement.dataset.alternatives || '[]');
+
+    // Prepare options (1 correct + 3 wrongs)
+    let options = [cleanCorrect, ...alternatives];
+    // Shuffle options
+    options = options.sort(() => Math.random() - 0.5);
+
+    // Build DOM
+    const popup = document.createElement('div');
+    popup.className = 'lingo-quiz-popup';
+    popup.style.cssText = `
+        position: absolute;
+        z-index: 10000;
+        background: white;
+        border: 1px solid #ccc;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        border-radius: 8px;
+        padding: 15px;
+        width: 250px;
+        font-family: sans-serif;
+        font-size: 14px;
+        color: #333;
+    `;
+
+    popup.innerHTML = `
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:5px;">
+            <strong>LingoGhost 👻</strong>
+            <span style="background:#e8f0fe; color:#1967d2; padding:2px 6px; border-radius:10px; font-size:11px;">Score: ${userScore}</span>
+        </div>
+        <div style="margin-bottom:10px;">
+            What does <strong style="color:#d93025;">${contextWord}</strong> mean?
+        </div>
+        <div class="lingo-options" style="display:flex; flex-direction:column; gap:8px;">
+            ${options.map(opt => `
+                <button class="lingo-opt-btn" data-val="${opt}" style="
+                    padding:8px; border:1px solid #ddd; background:#f8f9fa; border-radius:4px; cursor:pointer; text-align:left;
+                ">${opt}</button>
+            `).join('')}
+        </div>
+    `;
+
+    // Position popup
+    const rectification = targetElement.getBoundingClientRect();
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+    popup.style.top = `${rectification.bottom + scrollTop + 10}px`;
+    popup.style.left = `${rectification.left + scrollLeft}px`;
+
+    document.body.appendChild(popup);
+    currentPopup = popup;
+
+    // Add click listeners to options
+    const btns = popup.querySelectorAll('.lingo-opt-btn');
+    btns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const val = btn.dataset.val;
+            const isCorrect = (val === cleanCorrect);
+
+            // 1. Visual Feedback immediately
+            if (isCorrect) {
+                btn.style.background = '#e6f4ea';
+                btn.style.borderColor = '#1e8e3e';
+                btn.style.color = '#137333';
+                btn.innerText += ' ✅';
+                updateScore(10);
+            } else {
+                btn.style.background = '#fce8e6';
+                btn.style.borderColor = '#d93025';
+                btn.style.color = '#c5221f';
+                btn.innerText += ' ❌';
+                // Highlight correct one too so they learn
+                btns.forEach(b => {
+                    if (b.dataset.val === cleanCorrect) {
+                        b.style.background = '#e6f4ea';
+                        b.style.borderColor = '#1e8e3e';
+                    }
+                });
+                updateScore(-2); // Smaller penalty
+            }
+
+            // 2. Send stats to "Memory" (Background)
+            chrome.runtime.sendMessage({
+                action: "updateWordStats",
+                word: cleanCorrect, // The English meaning
+                isCorrect: isCorrect
+            });
+
+            // 3. Revert to original text after short delay
+            setTimeout(() => {
+                if (currentPopup) currentPopup.remove();
+                currentPopup = null;
+
+                // Revert text to original
+                targetElement.textContent = targetElement.dataset.original;
+
+                // Style to show it was interacted with
+                targetElement.classList.add('lingo-revealed');
+                targetElement.style.color = isCorrect ? '#137333' : '#c5221f'; // Green or Red text
+                targetElement.style.textDecoration = 'none';
+                targetElement.style.borderBottom = 'none';
+                targetElement.style.backgroundColor = 'transparent';
+
+                // Remove pointer events so they don't click again immediately
+                targetElement.style.pointerEvents = 'none';
+            }, 1200);
+        });
+    });
 }

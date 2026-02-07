@@ -12,12 +12,53 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
         return true; // Keep message channel open for async response
     }
+
+    if (request.action === "updateWordStats") {
+        updateStats(request.word, request.isCorrect);
+    }
 });
+
+// Simple stats tracking
+function updateStats(word, isCorrect) {
+    chrome.storage.local.get(['lingoGhostStats'], (result) => {
+        const stats = result.lingoGhostStats || {};
+        if (!stats[word]) {
+            stats[word] = { success: 0, fails: 0, lastSeen: Date.now() };
+        }
+
+        if (isCorrect) stats[word].success++;
+        else stats[word].fails++;
+
+        stats[word].lastSeen = Date.now();
+        chrome.storage.local.set({ lingoGhostStats: stats });
+    });
+}
+
+function getFailedWords(stats) {
+    if (!stats) return [];
+    // Filter words where failed > success OR recently failed
+    return Object.keys(stats).filter(word => {
+        const s = stats[word];
+        return (s.fails > s.success) || (s.fails > 0 && (Date.now() - s.lastSeen < 86400000)); // Prioritize recent fails
+    }).slice(0, 10); // Limit to top 10 to avoid huge prompts
+}
+
 
 async function handleTranslation(text, targetLang, density, config) {
     const { apiMode, apiKey, projectId, location, modelId } = config;
     let apiUrl = '';
     let token = '';
+
+    // NEW: Get failed words (Memory)
+    let failedWords = [];
+    try {
+        const result = await new Promise(resolve => chrome.storage.local.get(['lingoGhostStats'], resolve));
+        failedWords = getFailedWords(result.lingoGhostStats);
+        console.log("LingoGhost Memory: Prioritizing words:", failedWords);
+    } catch (e) {
+        console.warn("Failed to load memory:", e);
+    }
+
 
     console.log(`LingoGhost Background: Processing with Mode=${apiMode}, Model=${modelId}`);
 
@@ -44,12 +85,12 @@ async function handleTranslation(text, targetLang, density, config) {
             throw new Error("OAuth2 Error. Ensure `oauth2` client_id in manifest.json is correct. " + e.message);
         }
 
-        const model = modelId || 'gemini-3-flash-preview';
+        const model = modelId || 'gemini-1.5-flash';
         apiUrl = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
 
     } else {
         // Default: AI Studio
-        const model = modelId || 'gemini-3-flash-preview';
+        const model = modelId || 'gemini-1.5-flash';
         if (!apiKey) throw new Error("Missing API Key for Google AI Studio.");
         apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     }
@@ -57,17 +98,29 @@ async function handleTranslation(text, targetLang, density, config) {
     // limit text length
     const truncatedText = text.substring(0, 5000);
 
+    // Inject Memory into Prompt
+    const priorityInstruction = failedWords.length > 0
+        ? `7. CRITICAL: If the text contains any of these words (or their variations), YOU MUST select them for replacement:_ [${failedWords.join(', ')}]`
+        : '';
+
+    // Live Teacher Mode: frequent, small requests.
+    // We only want 1 or 2 words per "lesson" to avoid overwhelming the user and saving tokens.
+    const maxWords = 2;
+
     const prompt = `
     You are a language learning assistant.
-    Goal: Select approximately ${density}% of the words (nouns, adjectives, verbs) in the following text and translate them into ${targetLang}.
+    Goal: Select ${maxWords} distinct, interesting word(s) (nouns, adjectives, verbs) from the text and translate them into ${targetLang}.
     
     Rules:
     1. Select simple, common words suitable for learning.
     2. Provide the translation that fits the CONTEXT.
     3. Do NOT translate proper names or specialized technical terms.
-    4. Output MUST be valid JSON.
-    5. Format: { "replacements": [ { "original": "word", "translated": "traducción" }, ... ] }
-    6. Return ONLY the JSON object, no markdown formatting.
+    4. For each word, provide 3 distinctive INCORRECT options (distractors) in the ORIGINAL LANGUAGE (Same language as the "original" field). 
+       - e.g. If Original="Cat", Translated="Gato", Alternatives=["Dog", "Mouse", "Bird"].
+    5. Output MUST be valid JSON.
+    6. Format: { "replacements": [ { "original": "word", "translated": "traducción", "alternatives": ["incorrect1", "incorrect2", "incorrect3"] }, ... ] }
+    ${priorityInstruction}
+    8. Return ONLY the JSON object, no markdown formatting.
     
     Text to process:
     "${truncatedText}"
