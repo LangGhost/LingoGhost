@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>LingoGhost Settings</title>
+  <style>
+    body {
+      width: 320px;
+      padding: 15px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f9f9f9;
+      color: #333;
+    }
+
+    h1 {
+      font-size: 1.2rem;
+      margin-bottom: 15px;
+      color: #4285f4;
+      text-align: center;
+    }
+
+    .control-group {
+      margin-bottom: 15px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select {
+      width: 100%;
+      padding: 8px;
+      box-sizing: border-box;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+
+    input[type="range"] {
+      width: 100%;
+    }
+
+    .range-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: #666;
+    }
+
+    button {
+      width: 100%;
+      padding: 10px;
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background-color: #357abd;
+    }
+
+    #status {
+      margin-top: 10px;
+      text-align: center;
+      font-size: 0.85rem;
+      min-height: 1.2em;
+    }
+
+    .success {
+      color: green;
+    }
+
+    .error {
+      color: red;
+    }
+
+    .note {
+      font-size: 0.75rem;
+      color: #777;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>LingoGhost 👻</h1>
+
+  <div class="control-group">
+    <label for="apiMode">API Mode</label>
+    <select id="apiMode">
+      <option value="aistudio">Google AI Studio (API Key)</option>
+      <option value="vertex">Google Cloud Vertex AI (OAuth)</option>
+    </select>
+  </div>
+
+  <div id="aiStudioConfig" class="control-group">
+    <label for="apiKey">Gemini API Key</label>
+    <input type="password" id="apiKey" placeholder="Enter your API Key">
+    <div class="note">Get key from <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>
+    </div>
+  </div>
+
+  <div id="vertexConfig" class="control-group" style="display:none;">
+    <label for="projectId">Google Cloud Project ID</label>
+    <input type="text" id="projectId" placeholder="e.g. my-project-123">
+
+    <label for="location">Location</label>
+    <select id="location">
+      <option value="us-central1">us-central1 (Iowa)</option>
+      <option value="us-east4">us-east4 (Virginia)</option>
+      <option value="us-west1">us-west1 (Oregon)</option>
+      <option value="europe-west4">europe-west4 (Netherlands)</option>
+      <option value="asia-northeast1">asia-northeast1 (Tokyo)</option>
+      <option value="asia-southeast1">asia-southeast1 (Singapore)</option>
+    </select>
+    <div class="note">Requires `oauth2` client_id in manifest.json</div>
+  </div>
+
+  <label for="modelId">Model ID</label>
+  <input type="text" id="modelId" list="modelSuggestions" value="gemini-3-flash-preview"
+    placeholder="gemini-3-flash-preview">
+  <datalist id="modelSuggestions">
+    <option value="gemini-3-flash-preview">Gemini 3 Flash (Fast & Cheap)</option>
+    <option value="gemini-3-pro-preview">Gemini 3 Pro (Most Capable)</option>
+    <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash</option>
+    <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+    <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+  </datalist>
+
+  <div class="control-group">
+    <label for="targetLang">Target Language</label>
+    <select id="targetLang">
+      <option value="Spanish">Spanish 🇪🇸</option>
+      <option value="French">French 🇫🇷</option>
+      <option value="German">German 🇩🇪</option>
+      <option value="Italian">Italian 🇮🇹</option>
+      <option value="Portuguese">Portuguese 🇵🇹</option>
+      <option value="Japanese">Japanese 🇯🇵</option>
+      <option value="Chinese">Chinese 🇨🇳</option>
+      <option value="Russian">Russian 🇷🇺</option>
+    </select>
+  </div>
+
+  <div class="control-group">
+    <label for="density">Replacement Density: <span id="densityValue">20</span>%</label>
+    <input type="range" id="density" min="10" max="80" value="20">
+    <div class="range-labels">
+      <span>Low</span>
+      <span>High</span>
+    </div>
+  </div>
+
+  <button id="saveBtn">Save Settings</button>
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>

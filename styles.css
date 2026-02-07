@@ -1,0 +1,13 @@
+.langswitch-word {
+    background-color: #e8f0fe;
+    color: #1967d2;
+    border-bottom: 2px solid #aecbfa;
+    cursor: help;
+    transition: background-color 0.2s;
+    font-weight: 500;
+}
+
+.langswitch-word:hover {
+    background-color: #d2e3fc;
+    color: #174ea6;
+}
